@@ -190,7 +190,15 @@ class Seq2Seq(nn.Module):
         outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).to(self.device)
 
         # encoder_outputs(batch, seq_len, hidden_size): all hidden states of input sequence
-        encoder_outputs, (hidden, cell) = self.encoder(imgs)
+        if isinstance(self.encoder, Encoder):
+            encoder_outputs, (hidden, cell) = self.encoder(imgs)
+        elif isinstance(self.encoder, EncoderPlus):
+            frame_out, (frame_h_n, frame_c_n), clip_out, (clip_h_n, clip_c_n) = self.encoder(imgs)
+            # TODO: try different way to fuse outputs
+            encoder_outputs = frame_out[:,-1,:] + clip_out[:,-1,:]
+            encoder_outputs = encoder_outputs.unsqueeze(1)
+            hidden = frame_h_n + clip_h_n
+            cell = frame_c_n + clip_c_n
 
         # compute context vector
         context = encoder_outputs.mean(dim=1)
@@ -238,8 +246,9 @@ if __name__ == '__main__':
     # print(decoder(input, hidden, cell, context))
 
     # test seq2seq
-    # device = torch.device("cpu")
+    device = torch.device("cpu")
     # seq2seq = Seq2Seq(encoder=encoder, decoder=decoder, device=device)
-    # imgs = torch.randn(16, 3, 8, 128, 128)
-    # target = torch.LongTensor(16, 8).random_(0, 500)
-    # print(seq2seq(imgs, target).argmax(dim=2).permute(1,0)) # batch first
+    seq2seq = Seq2Seq(encoder=encoderPlus, decoder=decoder, device=device)
+    imgs = torch.randn(16, 3, 8, 128, 128)
+    target = torch.LongTensor(16, 8).random_(0, 500)
+    print(seq2seq(imgs, target).argmax(dim=2).permute(1,0)) # batch first
