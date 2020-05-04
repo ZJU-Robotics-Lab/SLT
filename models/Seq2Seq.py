@@ -57,6 +57,80 @@ class Encoder(nn.Module):
         return out, (h_n.squeeze(0), c_n.squeeze(0))
 
 
+class EncoderPlus(nn.Module):
+    def __init__(self, lstm_hidden_size=512, clip_len=5, arch="resnet18"):
+        super(EncoderPlus, self).__init__()
+        self.lstm_hidden_size = lstm_hidden_size
+        self.clip_len = clip_len
+
+        # frame encoder
+        if arch == "resnet18":
+            resnet = models.resnet18(pretrained=True)
+        elif arch == "resnet34":
+            resnet = models.resnet34(pretrained=True)
+        elif arch == "resnet50":
+            resnet = models.resnet50(pretrained=True)
+        elif arch == "resnet101":
+            resnet = models.resnet101(pretrained=True)
+        elif arch == "resnet152":
+            resnet = models.resnet152(pretrained=True)
+        # delete the last fc layer
+        modules = list(resnet.children())[:-1]
+        self.resnet = nn.Sequential(*modules)
+        self.lstm = nn.LSTM(
+            input_size=resnet.fc.in_features,
+            hidden_size=self.lstm_hidden_size,
+            batch_first=True,
+        )
+        # clip encoder
+        resnet3d = models.video.r3d_18(pretrained=True, progress=True)
+        modules3d = list(resnet3d.children())[:-1]
+        self.resnet3d = nn.Sequential(*modules3d)
+        self.lstm3d = nn.LSTM(
+            input_size=resnet3d.fc.in_features,
+            hidden_size=self.lstm_hidden_size,
+            batch_first=True,
+        )
+
+    def forward(self, x):
+        # frame level
+        cnn_embed_seq = []
+        # x: (batch_size, channel, t, h, w)
+        for t in range(x.size(2)):
+            out = self.resnet(x[:, :, t, :, :])
+            out = out.view(out.size(0), -1)
+            cnn_embed_seq.append(out)
+        cnn_embed_seq = torch.stack(cnn_embed_seq, dim=0)
+        # batch first
+        cnn_embed_seq = cnn_embed_seq.transpose_(0, 1)
+        # LSTM
+        # use faster code paths
+        self.lstm.flatten_parameters()
+        frame_out, (frame_h_n, frame_c_n) = self.lstm(cnn_embed_seq, None)
+
+        # clip level
+        cnn3d_embed_seq = []
+        for t in range(x.size(2)-self.clip_len+1):
+            out = self.resnet3d(x[:, :, t:t+self.clip_len, :, :])
+            # print(out.shape)
+            out = out.view(out.size(0), -1)
+            cnn3d_embed_seq.append(out)
+        cnn3d_embed_seq = torch.stack(cnn3d_embed_seq, dim=0)
+        # batch first
+        cnn3d_embed_seq = cnn3d_embed_seq.transpose_(0, 1)
+        # LSTM
+        # use faster code paths
+        self.lstm3d.flatten_parameters()
+        clip_out, (clip_h_n, clip_c_n) = self.lstm3d(cnn3d_embed_seq, None)
+
+        # num_layers * num_directions = 1
+        frame_h_n = frame_h_n.squeeze(0)
+        frame_c_n = frame_c_n.squeeze(0)
+        clip_h_n = clip_h_n.squeeze(0)
+        clip_c_n = clip_c_n.squeeze(0)
+        return frame_out, (frame_h_n, frame_c_n), clip_out, (clip_h_n, clip_c_n)
+
+
 class Decoder(nn.Module):
     def __init__(self, output_dim, emb_dim, enc_hid_dim, dec_hid_dim, dropout):
         super(Decoder, self).__init__()
@@ -116,7 +190,15 @@ class Seq2Seq(nn.Module):
         outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).to(self.device)
 
         # encoder_outputs(batch, seq_len, hidden_size): all hidden states of input sequence
-        encoder_outputs, (hidden, cell) = self.encoder(imgs)
+        if isinstance(self.encoder, Encoder):
+            encoder_outputs, (hidden, cell) = self.encoder(imgs)
+        elif isinstance(self.encoder, EncoderPlus):
+            frame_out, (frame_h_n, frame_c_n), clip_out, (clip_h_n, clip_c_n) = self.encoder(imgs)
+            # TODO: try different way to fuse outputs
+            encoder_outputs = frame_out[:,-1,:] + clip_out[:,-1,:]
+            encoder_outputs = encoder_outputs.unsqueeze(1)
+            hidden = frame_h_n + clip_h_n
+            cell = frame_c_n + clip_c_n
 
         # compute context vector
         context = encoder_outputs.mean(dim=1)
@@ -150,6 +232,11 @@ if __name__ == '__main__':
     # imgs = torch.randn(16, 3, 8, 128, 128)
     # print(encoder(imgs))
 
+    # test encoderPlus
+    encoderPlus = EncoderPlus(lstm_hidden_size=512)
+    # imgs = torch.randn(16, 3, 8, 128, 128)
+    # print(encoderPlus(imgs))
+
     # test decoder
     decoder = Decoder(output_dim=500, emb_dim=256, enc_hid_dim=512, dec_hid_dim=512, dropout=0.5)
     # input = torch.LongTensor(16).random_(0, 500)
@@ -160,7 +247,8 @@ if __name__ == '__main__':
 
     # test seq2seq
     device = torch.device("cpu")
-    seq2seq = Seq2Seq(encoder=encoder, decoder=decoder, device=device)
+    # seq2seq = Seq2Seq(encoder=encoder, decoder=decoder, device=device)
+    seq2seq = Seq2Seq(encoder=encoderPlus, decoder=decoder, device=device)
     imgs = torch.randn(16, 3, 8, 128, 128)
     target = torch.LongTensor(16, 8).random_(0, 500)
     print(seq2seq(imgs, target).argmax(dim=2).permute(1,0)) # batch first
