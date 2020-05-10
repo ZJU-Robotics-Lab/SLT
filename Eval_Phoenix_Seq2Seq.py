@@ -53,7 +53,7 @@ dropout = 0.5
 clip = 1
 # Options
 log_interval = 100
-checkpoint = None
+checkpoint = 'None'
 
 best_wer = 100.0
 start_epoch = 0
@@ -91,25 +91,12 @@ if __name__ == '__main__':
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-    # Start training
-    print("Training Started".center(60, '#'))
-    wer = 100.0
+    # Start evaluation
+    print("Evaluation Started".center(60, '#'))
     for epoch in range(start_epoch,start_epoch+epochs):
-        # Train the model
-        train_seq2seq(model, criterion, optimizer, clip, train_loader, device, epoch, log_interval, writer)
         # Validate the model
         val_seq2seq(model, criterion, val_loader, device, epoch, log_interval, writer)
         # Test the model
         wer = test_seq2seq(model, criterion, test_loader, device, epoch, log_interval, writer)
-        # Save model
-        # remember best wer and save checkpoint
-        is_best = wer<best_wer
-        best_wer = min(wer, best_wer)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'best': best_wer
-        }, is_best, model_path, store_name)
-        print("Epoch {} Model Saved".format(epoch+1).center(60, '#'))
 
-    print("Training Finished".center(60, '#'))
+    print("Evaluation Finished".center(60, '#'))

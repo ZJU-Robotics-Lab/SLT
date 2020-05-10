@@ -8,9 +8,13 @@ import time
 import json
 import numpy
 import sys
+sys.path.append('..')
 from utils.textUtils import *
 import torch.nn.functional as F
 from PIL import Image
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 class Record:
     def __init__(self,path,sentence):
@@ -36,6 +40,7 @@ class Phoenix(Dataset):
         self.stride = stride
         self.upsample_rate = upsample_rate
         self.transform = transform
+        self.max_length = 0
         self.prepare()
         self.get_data_list()
 
@@ -59,6 +64,7 @@ class Phoenix(Dataset):
             else:
                 # the index of <unk> is 3
                 indices.append(3)
+        self.max_length = max(len(indices),self.max_length)
         return indices
     
     def get_data_list(self):
@@ -70,6 +76,7 @@ class Phoenix(Dataset):
             sentence = self.process_sentence(sentence)
             record = Record(skeleton_path,sentence)
             self.data_list.append(record)
+        print('The max length of phoenix is: %d'%self.max_length)
 
     def read_image(self,filename):
         image =  Image.open(filename).convert('RGB')
@@ -88,6 +95,8 @@ class Phoenix(Dataset):
         for i in range(self.frames):
             index = min(start+i*step,len(image_list)-1)
             image = self.read_image(os.path.join(frame_path, image_list[index]))
+            plt.imshow(image)
+            plt.savefig('tmp/%06d.jpg'%i)
             if self.transform is not None:
                 image = self.transform(image)
             images.append(image)
@@ -103,6 +112,8 @@ class Phoenix(Dataset):
         image_path = record.image_path
         tokens = record.sentence
         N = len(tokens)
+        if N < self.max_length:
+            tokens.extend([self.dictionary['<pad>']]*(self.max_length-N))
         images = self.read_images(image_path)
         tokens = torch.LongTensor(tokens)
 
@@ -114,13 +125,21 @@ class Phoenix(Dataset):
 # Test
 if __name__ == '__main__':
     # Path settings
-    train_video_root = "/mnt/data/haodong/openpose_output/train"
-    train_annotation_file = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-signerindependent-SI5/annotations/manual/train.SI5.corpus.csv"
-    dev_video_root = "/mnt/data/haodong/openpose_output/dev"
-    dev_annotation_file = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-signerindependent-SI5/annotations/manual/dev.SI5.corpus.csv"
+    train_video_root = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/features/fullFrame-210x260px/train"
+    dev_video_root = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/features/fullFrame-210x260px/dev"
+    test_video_root = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/features/fullFrame-210x260px/test"
+    train_anno_file = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/annotations/manual/train.corpus.csv"
+    dev_anno_file = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/annotations/manual/dev.corpus.csv"
+    test_anno_file = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/annotations/manual/test.corpus.csv"
     # Build dictionary
-    dictionary = build_dictionary([train_annotation_file,dev_annotation_file])
-    dataset = Phoenix(image_root=train_video_root,annotation_file=train_annotation_file,dictionary=dictionary)
-    print(dataset[3000]['input'].size())
+    frames = 100
+    sample_size = 128
+    dictionary = build_dictionary(train_anno_file)
+    transform = transforms.Compose([transforms.Resize([sample_size, sample_size]),
+                                    transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.5], std=[0.5])])
+    dev_set = Phoenix(frames=frames,video_root=dev_video_root,annotation_file=dev_anno_file,
+        dictionary=dictionary,transform=transform)
+    print(dev_set[30][1])
 
 
