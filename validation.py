@@ -20,12 +20,12 @@ def val_seq2seq(model, criterion, dataloader, device, epoch, log_interval, write
     recoder.tik()
     recoder.data_tik()
     with torch.no_grad():
-        for batch_idx, (imgs, target) in enumerate(dataloader):
+        for batch_idx, batch in enumerate(dataloader):
             # measure data loading time
             recoder.data_tok()
             # get the data and labels
-            imgs = imgs.to(device)
-            target = target.to(device)
+            imgs = batch['videos'].cuda()
+            target = batch['annotations'].permute(1,0).contiguous().cuda()
 
             # forward(no teacher forcing)
             outputs = model(imgs, target, 0)
@@ -90,12 +90,12 @@ def test_seq2seq(model, criterion, dataloader, device, epoch, log_interval, writ
     recoder.tik()
     recoder.data_tik()
     with torch.no_grad():
-        for batch_idx, (imgs, target) in enumerate(dataloader):
+        for batch_idx, batch in enumerate(dataloader):
             # measure data loading time
             recoder.data_tok()
             # get the data and labels
-            imgs = imgs.to(device)
-            target = target.to(device)
+            imgs = batch['videos'].cuda()
+            target = batch['annotations'].permute(1,0).contiguous().cuda()
 
             # forward(no teacher forcing)
             outputs = model(imgs, target, 0)

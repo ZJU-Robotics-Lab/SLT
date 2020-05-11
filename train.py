@@ -19,12 +19,12 @@ def train_seq2seq(model, criterion, optimizer, clip, dataloader, device, epoch, 
 
     recoder.tik()
     recoder.data_tik()
-    for batch_idx, (imgs, target) in enumerate(dataloader):
+    for batch_idx, batch in enumerate(dataloader):
         # measure data loading time
         recoder.data_tok()
         # get the data and labels
-        imgs = imgs.to(device)
-        target = target.to(device)
+        imgs = batch['videos'].cuda()
+        target = batch['annotations'].permute(1,0).contiguous().cuda()
 
         optimizer.zero_grad()
         # forward

@@ -9,11 +9,15 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import torchvision.transforms as transforms
 from datasets.Phoenix import Phoenix
+from datasets.phoenixDataset import PhoenixDataset
 from models.Seq2Seq import Encoder, Decoder, Seq2Seq
 from train import train_seq2seq
 from validation import val_seq2seq,test_seq2seq
 from utils.ioUtils import *
 from utils.textUtils import build_dictionary,reverse_phoenix_dictionary
+from torchtext.data import Field
+from torch.nn.utils.rnn import pad_sequence
+import pandas as pd
 
 # Path setting
 train_video_root = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/features/fullFrame-210x260px/train"
@@ -58,24 +62,58 @@ checkpoint = None
 best_wer = 100.0
 start_epoch = 0
 if __name__ == '__main__':
-    # Build dictionary
-    dictionary = build_dictionary(train_anno_file)
-    reverse_dict = reverse_phoenix_dictionary(dictionary)
-    vocab_size = len(reverse_dict)
-    # Load data
-    transform = transforms.Compose([transforms.Resize([sample_size, sample_size]),
-                                    transforms.ToTensor(),
-                                    transforms.Normalize(mean=[0.5], std=[0.5])])
-    train_set = Phoenix(frames=frames,video_root=train_video_root,annotation_file=train_anno_file,
-        dictionary=dictionary,transform=transform)
-    val_set = Phoenix(frames=frames,video_root=dev_video_root,annotation_file=dev_anno_file,
-        dictionary=dictionary,transform=transform)
-    test_set = Phoenix(frames=frames,video_root=test_video_root,annotation_file=test_anno_file,
-        dictionary=dictionary,transform=transform)
-    print("Dataset samples: {}".format(len(train_set)+len(val_set)))
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=16, pin_memory=True)
-    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=True, num_workers=16, pin_memory=True)
-    test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=True, num_workers=16, pin_memory=True)
+    #-----------------------------load dataset--------------------------
+    TRG = Field(sequential=True, use_vocab=True,
+                init_token='<sos>', eos_token= '<eos>',
+                lower=True, tokenize='spacy',
+                tokenizer_language='de')
+
+
+    root = '/mnt/data/public/datasets'
+    csv_dir = os.path.join(root, 'phoenix2014-release/phoenix-2014-multisigner')
+    csv_dir = os.path.join(csv_dir, 'annotations/manual/train.corpus.csv')
+    csv_file = pd.read_csv(csv_dir)
+    tgt_sents = [csv_file.iloc[i, 0].lower().split('|')[3].split()
+                for i in range(len(csv_file))]
+    TRG.build_vocab(tgt_sents, min_freq=1)
+    vocab_size = len(TRG.vocab)
+
+    def collate_fn(batch):
+        videos = [item['video'] for item in batch]
+        video_lens = torch.tensor([len(v) for v in videos])
+        videos = pad_sequence(videos, batch_first=True)
+        videos = videos.permute(0,2,1,3,4).contiguous()
+        annotations = [['<sos>']+item['annotation'].split()+['<eos>'] for item in batch]
+        annotation_lens = torch.tensor([len(anno) for anno in annotations])
+        annotations = TRG.process(annotations)
+        return {'videos': videos,
+                'annotations': annotations,
+                'video_lens': video_lens,
+                'annotation_lens': annotation_lens}
+
+    FrameSize = 128
+    BSZ = 2
+    interval = 4
+
+    transform = transforms.Compose([
+        transforms.RandomResizedCrop(FrameSize),
+        transforms.ToTensor()])
+
+    train_loader = DataLoader(
+        PhoenixDataset(root, mode='train', interval=interval, transform=transform),
+        batch_size=BSZ, shuffle=True, num_workers=BSZ,
+        collate_fn=collate_fn, pin_memory=True)
+
+    val_loader = DataLoader(
+        PhoenixDataset(root, mode='dev', interval=interval, transform=transform),
+        batch_size=BSZ, shuffle=False, num_workers=BSZ,
+        collate_fn=collate_fn, pin_memory=True)
+
+    test_loader = DataLoader(
+        PhoenixDataset(root, mode='test', interval=interval, transform=transform),
+        batch_size=BSZ, shuffle=False, num_workers=BSZ,
+        collate_fn=collate_fn, pin_memory=True)
+
     # Create Model
     encoder = Encoder(lstm_hidden_size=enc_hid_dim, arch="resnet18").to(device)
     decoder = Decoder(output_dim=vocab_size, emb_dim=emb_dim, enc_hid_dim=enc_hid_dim, dec_hid_dim=dec_hid_dim, dropout=dropout).to(device)
@@ -95,12 +133,12 @@ if __name__ == '__main__':
     print("Training Started".center(60, '#'))
     wer = 100.0
     for epoch in range(start_epoch,start_epoch+epochs):
-        # Train the model
-        train_seq2seq(model, criterion, optimizer, clip, train_loader, device, epoch, log_interval, writer)
         # Validate the model
         val_seq2seq(model, criterion, val_loader, device, epoch, log_interval, writer)
         # Test the model
         wer = test_seq2seq(model, criterion, test_loader, device, epoch, log_interval, writer)
+        # Train the model
+        train_seq2seq(model, criterion, optimizer, clip, train_loader, device, epoch, log_interval, writer)
         # Save model
         # remember best wer and save checkpoint
         is_best = wer<best_wer

@@ -132,4 +132,5 @@ dmypy.json
 runs
 log
 checkpoint
+*DS_Store
 
