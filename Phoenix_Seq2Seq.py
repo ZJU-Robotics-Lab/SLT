@@ -38,23 +38,22 @@ sum_path = "runs/phoenix_seq2seq/{:%Y-%m-%d_%H-%M-%S}".format(datetime.now())
 writer = SummaryWriter(sum_path)
 
 # Use specific gpus
-os.environ["CUDA_VISIBLE_DEVICES"]="1"
+os.environ["CUDA_VISIBLE_DEVICES"]="2"
 # Device setting
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Hyperparams
 epochs = 100
-batch_size = 4
-frames = 100
-learning_rate = 1e-4
+batch_size = 1
+learning_rate = 5e-5
 weight_decay = 1e-5
-sample_size = 128
-sample_duration = 48
-enc_hid_dim = 512
+sample_size = 224
+sample_interval = 8
+enc_hid_dim = 1000
 emb_dim = 256
-dec_hid_dim = 512
-dropout = 0.5
-clip = 1
+dec_hid_dim = 1000
+dropout = 0.2
+clip = 5
 # Options
 log_interval = 100
 checkpoint = None
@@ -91,27 +90,24 @@ if __name__ == '__main__':
                 'video_lens': video_lens,
                 'annotation_lens': annotation_lens}
 
-    FrameSize = 128
-    BSZ = 2
-    interval = 4
-
     transform = transforms.Compose([
-        transforms.RandomResizedCrop(FrameSize),
-        transforms.ToTensor()])
+        transforms.Resize(sample_size),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5], std=[0.5])])
 
     train_loader = DataLoader(
-        PhoenixDataset(root, mode='train', interval=interval, transform=transform),
-        batch_size=BSZ, shuffle=True, num_workers=BSZ,
+        PhoenixDataset(root, mode='train', interval=sample_interval, transform=transform),
+        batch_size=batch_size, shuffle=True, num_workers=16,
         collate_fn=collate_fn, pin_memory=True)
 
     val_loader = DataLoader(
-        PhoenixDataset(root, mode='dev', interval=interval, transform=transform),
-        batch_size=BSZ, shuffle=False, num_workers=BSZ,
+        PhoenixDataset(root, mode='dev', interval=sample_interval, transform=transform),
+        batch_size=batch_size, shuffle=False, num_workers=16,
         collate_fn=collate_fn, pin_memory=True)
 
     test_loader = DataLoader(
-        PhoenixDataset(root, mode='test', interval=interval, transform=transform),
-        batch_size=BSZ, shuffle=False, num_workers=BSZ,
+        PhoenixDataset(root, mode='test', interval=sample_interval, transform=transform),
+        batch_size=batch_size, shuffle=False, num_workers=16,
         collate_fn=collate_fn, pin_memory=True)
 
     # Create Model
@@ -133,12 +129,12 @@ if __name__ == '__main__':
     print("Training Started".center(60, '#'))
     wer = 100.0
     for epoch in range(start_epoch,start_epoch+epochs):
+        # Train the model
+        train_seq2seq(model, criterion, optimizer, clip, train_loader, device, epoch, log_interval, writer)
         # Validate the model
         val_seq2seq(model, criterion, val_loader, device, epoch, log_interval, writer)
         # Test the model
         wer = test_seq2seq(model, criterion, test_loader, device, epoch, log_interval, writer)
-        # Train the model
-        train_seq2seq(model, criterion, optimizer, clip, train_loader, device, epoch, log_interval, writer)
         # Save model
         # remember best wer and save checkpoint
         is_best = wer<best_wer

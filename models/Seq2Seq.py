@@ -31,6 +31,7 @@ class Encoder(nn.Module):
             input_size=resnet.fc.in_features,
             hidden_size=self.lstm_hidden_size,
             batch_first=True,
+            num_layers=4,
         )
 
     def forward(self, x):
@@ -53,8 +54,7 @@ class Encoder(nn.Module):
         self.lstm.flatten_parameters()
         out, (h_n, c_n) = self.lstm(cnn_embed_seq, None)
 
-        # num_layers * num_directions = 1
-        return out, (h_n.squeeze(0), c_n.squeeze(0))
+        return out, (h_n, c_n)
 
 
 class EncoderPlus(nn.Module):
@@ -136,14 +136,17 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.output_dim = output_dim
         self.embedding = nn.Embedding(output_dim, emb_dim)
-        self.rnn = nn.LSTM(emb_dim+enc_hid_dim, dec_hid_dim)
+        self.rnn = nn.LSTM(
+            input_size=emb_dim+enc_hid_dim,
+            hidden_size=dec_hid_dim,
+            num_layers=4)
         self.fc = nn.Linear(emb_dim+enc_hid_dim+dec_hid_dim, output_dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, input, hidden, cell, context):
         # input(batch_size): last prediction
-        # hidden(batch_size, dec_hid_dim): decoder last hidden state
-        # cell(batch_size, dec_hid_dim): decoder last cell state
+        # hidden(num_layers*num_directions, batch_size, dec_hid_dim): decoder last hidden state
+        # cell(num_layers*num_directions, batch_size, dec_hid_dim): decoder last cell state
         # context(batch_size, enc_hid_dim): context vector
         # print(input.shape, hidden.shape, cell.shape, context.shape)
         # expand dim to (1, batch_size)
@@ -157,17 +160,13 @@ class Decoder(nn.Module):
 
         # output(seq_len, batch, num_directions * hidden_size)
         # hidden(num_layers * num_directions, batch, hidden_size)
-        output, (hidden, cell) = self.rnn(rnn_input, (hidden.unsqueeze(0), cell.unsqueeze(0)))
+        output, (hidden, cell) = self.rnn(rnn_input, (hidden, cell))
 
-        # hidden(batch_size, dec_hid_dim)
-        # cell(batch_size, dec_hid_dim)
         # embedded(1, batch_size, emb_dim)
-        hidden = hidden.squeeze(0)
-        cell = cell.squeeze(0)
         embedded = embedded.squeeze(0)
 
         # prediction
-        prediction = self.fc(torch.cat((embedded, context, hidden), dim=1))
+        prediction = self.fc(torch.cat((embedded, context, hidden[-1]), dim=1))
 
         return prediction, (hidden, cell)
 
@@ -201,7 +200,8 @@ class Seq2Seq(nn.Module):
             cell = frame_c_n + clip_c_n
 
         # compute context vector
-        context = encoder_outputs.mean(dim=1)
+        # context = encoder_outputs.mean(dim=1)
+        context = encoder_outputs[:,-1,:]
 
         # first input to the decoder is the <sos> tokens
         input = target[:,0]
@@ -248,7 +248,7 @@ if __name__ == '__main__':
     # test seq2seq
     device = torch.device("cpu")
     # seq2seq = Seq2Seq(encoder=encoder, decoder=decoder, device=device)
-    seq2seq = Seq2Seq(encoder=encoderPlus, decoder=decoder, device=device)
+    seq2seq = Seq2Seq(encoder=encoder, decoder=decoder, device=device)
     imgs = torch.randn(16, 3, 8, 128, 128)
     target = torch.LongTensor(16, 8).random_(0, 500)
     print(seq2seq(imgs, target).argmax(dim=2).permute(1,0)) # batch first
