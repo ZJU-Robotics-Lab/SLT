@@ -10,27 +10,21 @@ from torch.utils.tensorboard import SummaryWriter
 import torchvision.transforms as transforms
 from datasets.Phoenix import Phoenix
 from datasets.phoenixDataset import PhoenixDataset
-from models.Seq2Seq import Encoder, Decoder, Seq2Seq
+from models.Seq2Seq import Encoder, Decoder, Attn, Seq2Seq
 from train import train_seq2seq
 from validation import val_seq2seq,test_seq2seq
 from utils.ioUtils import *
 from utils.textUtils import build_dictionary,reverse_phoenix_dictionary
 from torchtext.data import Field
+from torchtext.vocab import Vectors
+# import gensim
 from torch.nn.utils.rnn import pad_sequence
 import pandas as pd
 
 # Path setting
-train_video_root = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/features/fullFrame-210x260px/train"
-dev_video_root = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/features/fullFrame-210x260px/dev"
-test_video_root = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/features/fullFrame-210x260px/test"
-train_anno_file = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/annotations/manual/train.corpus.csv"
-dev_anno_file = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/annotations/manual/dev.corpus.csv"
-test_anno_file = "/mnt/data/public/datasets/phoenix2014-release/phoenix-2014-multisigner/annotations/manual/test.corpus.csv"
-
 model_path = "./checkpoint"
 create_path(model_path)
 create_path('log')
-create_path('runs')
 store_name = 'phoenix_seq2seq'
 sum_path = "runs/phoenix_seq2seq/{:%Y-%m-%d_%H-%M-%S}".format(datetime.now())
 
@@ -49,10 +43,11 @@ learning_rate = 5e-5
 weight_decay = 1e-5
 sample_size = 224
 sample_interval = 8
-enc_hid_dim = 1000
-emb_dim = 256
-dec_hid_dim = 1000
-dropout = 0.2
+enc_hid_dim = 512
+dec_hid_dim = 512
+attn_dim = 64
+emb_dim = 300
+dropout = 0.5
 clip = 5
 # Options
 log_interval = 100
@@ -62,6 +57,9 @@ best_wer = 100.0
 start_epoch = 0
 if __name__ == '__main__':
     #-----------------------------load dataset--------------------------
+    # model = gensim.models.KeyedVectors.load_word2vec_format("german.model", binary=True)
+    # model.wv.save_word2vec_format('embedding_model')
+    vectors = Vectors(name='embedding_model')
     TRG = Field(sequential=True, use_vocab=True,
                 init_token='<sos>', eos_token= '<eos>',
                 lower=True, tokenize='spacy',
@@ -74,8 +72,9 @@ if __name__ == '__main__':
     csv_file = pd.read_csv(csv_dir)
     tgt_sents = [csv_file.iloc[i, 0].lower().split('|')[3].split()
                 for i in range(len(csv_file))]
-    TRG.build_vocab(tgt_sents, min_freq=1)
+    TRG.build_vocab(tgt_sents, min_freq=2, vectors=vectors)
     vocab_size = len(TRG.vocab)
+    print(vocab_size)
 
     def collate_fn(batch):
         videos = [item['video'] for item in batch]
@@ -111,8 +110,9 @@ if __name__ == '__main__':
         collate_fn=collate_fn, pin_memory=True)
 
     # Create Model
-    encoder = Encoder(lstm_hidden_size=enc_hid_dim, arch="resnet18").to(device)
-    decoder = Decoder(output_dim=vocab_size, emb_dim=emb_dim, enc_hid_dim=enc_hid_dim, dec_hid_dim=dec_hid_dim, dropout=dropout).to(device)
+    encoder = Encoder(enc_hid_dim=enc_hid_dim, dec_hid_dim=dec_hid_dim, arch="resnet18").to(device)
+    attn = Attn(enc_hid_dim=enc_hid_dim, dec_hid_dim=dec_hid_dim, attn_dim=attn_dim).to(device)
+    decoder = Decoder(output_dim=vocab_size, emb_dim=emb_dim, enc_hid_dim=enc_hid_dim, dec_hid_dim=dec_hid_dim, dropout=dropout, attention=attn, pretrained_emb=TRG.vocab.vectors).to(device)
     model = Seq2Seq(encoder=encoder, decoder=decoder, device=device).to(device)
     # Resume model
     if checkpoint is not None:

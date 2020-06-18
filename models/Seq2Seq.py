@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 import random
+import spacy
 
 """
 Implementation of Sequence to Sequence Model
@@ -172,14 +173,18 @@ class Attn(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, output_dim, emb_dim, enc_hid_dim, dec_hid_dim, dropout, attention):
+    def __init__(self, output_dim, emb_dim, enc_hid_dim, dec_hid_dim, dropout, attention, pretrained_emb=None):
         super(Decoder, self).__init__()
         self.output_dim = output_dim
         self.emb_dim = emb_dim
         self.enc_hid_dim = enc_hid_dim
         self.dec_hid_dim = dec_hid_dim
         self.attention = attention
-        self.embedding = nn.Embedding(output_dim, emb_dim)
+        # Load pretrained embeddings
+        if pretrained_emb is not None:
+            self.embedding = nn.Embedding(output_dim, emb_dim).from_pretrained(pretrained_emb)
+        else:
+            self.embedding = nn.Embedding(output_dim, emb_dim)
         self.rnn = nn.GRU(emb_dim+enc_hid_dim*2, dec_hid_dim)
         self.fc = nn.Linear(self.attention.attn_in+emb_dim, output_dim)
         self.dropout = nn.Dropout(dropout)
